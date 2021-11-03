@@ -23,24 +23,25 @@ import (
 )
 
 type MetricMapping struct {
-	Match            string `yaml:"match"`
-	Name             string `yaml:"name"`
-	nameFormatter    *fsm.TemplateFormatter
-	regex            *regexp.Regexp
-	Labels           prometheus.Labels `yaml:"labels"`
-	labelKeys        []string
-	labelFormatters  []*fsm.TemplateFormatter
-	ObserverType     ObserverType      `yaml:"observer_type"`
-	TimerType        ObserverType      `yaml:"timer_type,omitempty"` // DEPRECATED - field only present to preserve backwards compatibility in configs. Always empty
-	LegacyBuckets    []float64         `yaml:"buckets"`
-	LegacyQuantiles  []metricObjective `yaml:"quantiles"`
-	MatchType        MatchType         `yaml:"match_type"`
-	HelpText         string            `yaml:"help"`
-	Action           ActionType        `yaml:"action"`
-	MatchMetricType  MetricType        `yaml:"match_metric_type"`
-	Ttl              time.Duration     `yaml:"ttl"`
-	SummaryOptions   *SummaryOptions   `yaml:"summary_options"`
-	HistogramOptions *HistogramOptions `yaml:"histogram_options"`
+	Match              string `yaml:"match"`
+	Name               string `yaml:"name"`
+	nameFormatter      *fsm.TemplateFormatter
+	regex              *regexp.Regexp
+	Labels             prometheus.Labels `yaml:"labels"`
+	labelKeys          []string
+	labelFormatters    []*fsm.TemplateFormatter
+	ObserverType       ObserverType      `yaml:"observer_type"`
+	OverrideMetricType MetricType        `yaml:"override_metric_type"`
+	TimerType          ObserverType      `yaml:"timer_type,omitempty"` // DEPRECATED - field only present to preserve backwards compatibility in configs. Always empty
+	LegacyBuckets      []float64         `yaml:"buckets"`
+	LegacyQuantiles    []metricObjective `yaml:"quantiles"`
+	MatchType          MatchType         `yaml:"match_type"`
+	HelpText           string            `yaml:"help"`
+	Action             ActionType        `yaml:"action"`
+	MatchMetricType    MetricType        `yaml:"match_metric_type"`
+	Ttl                time.Duration     `yaml:"ttl"`
+	SummaryOptions     *SummaryOptions   `yaml:"summary_options"`
+	HistogramOptions   *HistogramOptions `yaml:"histogram_options"`
 }
 
 // UnmarshalYAML is a custom unmarshal function to allow use of deprecated config keys
@@ -57,6 +58,7 @@ func (m *MetricMapping) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	m.Name = tmp.Name
 	m.Labels = tmp.Labels
 	m.ObserverType = tmp.ObserverType
+	m.OverrideMetricType = tmp.OverrideMetricType
 	m.LegacyBuckets = tmp.LegacyBuckets
 	m.LegacyQuantiles = tmp.LegacyQuantiles
 	m.MatchType = tmp.MatchType

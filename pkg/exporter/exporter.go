@@ -113,78 +113,118 @@ func (b *Exporter) handleEvent(thisEvent event.Event) {
 		metricName = mapper.EscapeMetricName(thisEvent.MetricName())
 	}
 
-	switch ev := thisEvent.(type) {
-	case *event.CounterEvent:
-		// We don't accept negative values for counters. Incrementing the counter with a negative number
-		// will cause the exporter to panic. Instead we will warn and continue to the next event.
-		if thisEvent.Value() < 0.0 {
-			level.Debug(b.Logger).Log("msg", "counter must be non-negative value", "metric", metricName, "event_value", thisEvent.Value())
-			b.ErrorEventStats.WithLabelValues("illegal_negative_counter").Inc()
-			return
-		}
-
-		counter, err := b.Registry.GetCounter(metricName, prometheusLabels, help, mapping, b.MetricsCount)
-		if err == nil {
-			counter.Add(thisEvent.Value())
-			b.EventStats.WithLabelValues("counter").Inc()
-		} else {
-			level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
-			b.ConflictingEventStats.WithLabelValues("counter").Inc()
-		}
-
-	case *event.GaugeEvent:
-		gauge, err := b.Registry.GetGauge(metricName, prometheusLabels, help, mapping, b.MetricsCount)
-
-		if err == nil {
-			if ev.GRelative {
-				gauge.Add(thisEvent.Value())
-			} else {
-				gauge.Set(thisEvent.Value())
+	// Convert the metric type from what it was sent as. This is useful for
+	// when someone uses statsd metric types like counters as a gauge.
+	if mapping != nil && mapping.OverrideMetricType != "" && thisEvent.MetricType() != mapping.OverrideMetricType {
+		var newEvent event.Event
+		switch mapping.OverrideMetricType {
+		case mapper.MetricTypeCounter:
+			newEvent = &event.CounterEvent{
+				CMetricName: metricName,
+				CValue:      thisEvent.Value(),
+				CLabels:     prometheusLabels,
 			}
-			b.EventStats.WithLabelValues("gauge").Inc()
-		} else {
-			level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
-			b.ConflictingEventStats.WithLabelValues("gauge").Inc()
-		}
-
-	case *event.ObserverEvent:
-		t := mapper.ObserverTypeDefault
-		if mapping != nil {
-			t = mapping.ObserverType
-		}
-		if t == mapper.ObserverTypeDefault {
-			t = b.Mapper.Defaults.ObserverType
-		}
-
-		switch t {
-		case mapper.ObserverTypeHistogram:
-			histogram, err := b.Registry.GetHistogram(metricName, prometheusLabels, help, mapping, b.MetricsCount)
-			if err == nil {
-				histogram.Observe(thisEvent.Value())
-				b.EventStats.WithLabelValues("observer").Inc()
-			} else {
-				level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
-				b.ConflictingEventStats.WithLabelValues("observer").Inc()
+		case mapper.MetricTypeGauge:
+			newEvent = &event.GaugeEvent{
+				GMetricName: metricName,
+				GValue:      thisEvent.Value(),
+				GRelative:   false,
+				GLabels:     prometheusLabels,
 			}
-
-		case mapper.ObserverTypeDefault, mapper.ObserverTypeSummary:
-			summary, err := b.Registry.GetSummary(metricName, prometheusLabels, help, mapping, b.MetricsCount)
-			if err == nil {
-				summary.Observe(thisEvent.Value())
-				b.EventStats.WithLabelValues("observer").Inc()
-			} else {
-				level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
-				b.ConflictingEventStats.WithLabelValues("observer").Inc()
+		case mapper.MetricTypeObserver, mapper.MetricTypeTimer:
+			newEvent = &event.ObserverEvent{
+				OMetricName: metricName,
+				OValue:      thisEvent.Value(),
+				OLabels:     prometheusLabels,
 			}
-
 		default:
-			level.Error(b.Logger).Log("msg", "unknown observer type", "type", t)
+			level.Error(b.Logger).Log("msg", "unknown metric type", "type", mapping.OverrideMetricType)
 			os.Exit(1)
 		}
+		thisEvent = newEvent
+	}
 
+	switch ev := thisEvent.(type) {
+	case *event.CounterEvent:
+		b.handleCounter(metricName, help, prometheusLabels, mapping, ev)
+	case *event.GaugeEvent:
+		b.handleGauge(metricName, help, prometheusLabels, mapping, ev)
+	case *event.ObserverEvent:
+		b.handleObserver(metricName, help, prometheusLabels, mapping, ev)
 	default:
 		level.Debug(b.Logger).Log("msg", "Unsupported event type")
 		b.EventStats.WithLabelValues("illegal").Inc()
+	}
+}
+
+func (b *Exporter) handleCounter(metricName, help string, prometheusLabels map[string]string, mapping *mapper.MetricMapping, thisEvent *event.CounterEvent) {
+	// We don't accept negative values for counters. Incrementing the counter with a negative number
+	// will cause the exporter to panic. Instead we will warn and continue to the next event.
+	if thisEvent.Value() < 0.0 {
+		level.Debug(b.Logger).Log("msg", "counter must be non-negative value", "metric", metricName, "event_value", thisEvent.Value())
+		b.ErrorEventStats.WithLabelValues("illegal_negative_counter").Inc()
+		return
+	}
+
+	counter, err := b.Registry.GetCounter(metricName, prometheusLabels, help, mapping, b.MetricsCount)
+	if err == nil {
+		counter.Add(thisEvent.Value())
+		b.EventStats.WithLabelValues("counter").Inc()
+	} else {
+		level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
+		b.ConflictingEventStats.WithLabelValues("counter").Inc()
+	}
+}
+
+func (b *Exporter) handleGauge(metricName, help string, prometheusLabels map[string]string, mapping *mapper.MetricMapping, thisEvent *event.GaugeEvent) {
+	gauge, err := b.Registry.GetGauge(metricName, prometheusLabels, help, mapping, b.MetricsCount)
+
+	if err == nil {
+		if thisEvent.GRelative {
+			gauge.Add(thisEvent.Value())
+		} else {
+			gauge.Set(thisEvent.Value())
+		}
+		b.EventStats.WithLabelValues("gauge").Inc()
+	} else {
+		level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
+		b.ConflictingEventStats.WithLabelValues("gauge").Inc()
+	}
+}
+
+func (b *Exporter) handleObserver(metricName, help string, prometheusLabels map[string]string, mapping *mapper.MetricMapping, thisEvent *event.ObserverEvent) {
+	t := mapper.ObserverTypeDefault
+	if mapping != nil {
+		t = mapping.ObserverType
+	}
+	if t == mapper.ObserverTypeDefault {
+		t = b.Mapper.Defaults.ObserverType
+	}
+
+	switch t {
+	case mapper.ObserverTypeHistogram:
+		histogram, err := b.Registry.GetHistogram(metricName, prometheusLabels, help, mapping, b.MetricsCount)
+		if err == nil {
+			histogram.Observe(thisEvent.Value())
+			b.EventStats.WithLabelValues("observer").Inc()
+		} else {
+			level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
+			b.ConflictingEventStats.WithLabelValues("observer").Inc()
+		}
+
+	case mapper.ObserverTypeDefault, mapper.ObserverTypeSummary:
+		summary, err := b.Registry.GetSummary(metricName, prometheusLabels, help, mapping, b.MetricsCount)
+		if err == nil {
+			summary.Observe(thisEvent.Value())
+			b.EventStats.WithLabelValues("observer").Inc()
+		} else {
+			level.Debug(b.Logger).Log("msg", regErrF, "metric", metricName, "error", err)
+			b.ConflictingEventStats.WithLabelValues("observer").Inc()
+		}
+
+	default:
+		level.Error(b.Logger).Log("msg", "unknown observer type", "type", t)
+		os.Exit(1)
 	}
 }
 
